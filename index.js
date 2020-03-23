@@ -1,3 +1,14 @@
+/**
+ * BrizotIT changes:
+ *
+ * 1. Add all timezones from incoming iCalendar, see brizoit #1.
+ * 2. Timezones export. See brizoit #2.
+ * 3. Corrected so all day events get startTime/endTime in current user time zone.
+ * Use moment object which is already initilized with user's time zone. Before this fix first and last period events
+ * could be skipped when user's timezone was not matching computer timezone. See brizoit #3.
+ * 4. Added zones-jira.json to support Zones like UTC and GMT* that we have in Jira, see brizoit #4.
+ */
+
 'use strict';
 
 const ICAL = require('ical.js');
@@ -5,7 +16,8 @@ const ICAL = require('ical.js');
 // Copied from https://dxr.mozilla.org/comm-central/source/calendar/timezones/zones.json
 // And compiled using node compile-zones.js
 // See also https://github.com/mozilla-comm/ical.js/issues/195
-const timezones = require('./zones-compiled.json');
+// brizoit #4: Added zones-jira.json
+const timezones = Object.assign(require('./zones-compiled.json'), require('./zones-jira.json'));
 
 class IcalExpander {
   constructor(opts) {
@@ -14,6 +26,16 @@ class IcalExpander {
 
     this.jCalData = ICAL.parse(opts.ics);
     this.component = new ICAL.Component(this.jCalData);
+
+    // brizoit #1: add all timezones
+    // Add all timezones from incoming iCalendar object to TimezonService if they are not already registered.
+    var vtimezones = this.component.getAllSubcomponents("vtimezone");
+    vtimezones.forEach(function (vtimezone) {
+      if (!ICAL.TimezoneService.has(vtimezone.getFirstPropertyValue("tzid"))) {
+        ICAL.TimezoneService.register(vtimezone);
+      }
+    });
+
     this.events = this.component.getAllSubcomponents('vevent').map(vevent => new ICAL.Event(vevent));
 
     if (this.skipInvalidDates) {
@@ -37,8 +59,14 @@ class IcalExpander {
     }
 
     function getTimes(eventOrOccurrence) {
-      const startTime = eventOrOccurrence.startDate.toJSDate().getTime();
-      let endTime = eventOrOccurrence.endDate.toJSDate().getTime();
+      // brizoit #3: all day events get correct startTime/endTime
+      var startTime = eventOrOccurrence.startDate.isDate ?
+        moment(eventOrOccurrence.startDate.toString()).unix() * 1000 :
+        eventOrOccurrence.startDate.toJSDate().getTime();
+      // brizoit #3: all day events get correct startTime / endTime
+      var endTime = eventOrOccurrence.endDate.isDate ?
+        moment(eventOrOccurrence.endDate.toString()).unix() * 1000 :
+        eventOrOccurrence.endDate.toJSDate().getTime();
 
       // If it is an all day event, the end date is set to 00:00 of the next day
       // So we need to make it be 23:59:59 to compare correctly with the given range
@@ -141,4 +169,6 @@ function registerTimezones() {
 
 registerTimezones();
 
-module.exports = IcalExpander;
+// brizoit #2: timezones export
+module.exports.ICalExpander = IcalExpander;
+module.exports.TIME_ZONES = timezones;
